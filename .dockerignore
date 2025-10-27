@@ -1,0 +1,24 @@
+# .dockerignore
+
+# Ignore git history
+.git
+.gitignore
+
+# Ignore local dependencies (they will be installed in the container)
+node_modules
+
+# Ignore local build output (it will be built in the container)
+.next
+
+# Ignore local environment files
+.env.local
+.env
+
+# Ignore Docker files so they aren't copied into themselves
+Dockerfile
+.dockerignore
+
+# Ignore IDE and OS files
+.vscode
+.idea
+.DS_Store

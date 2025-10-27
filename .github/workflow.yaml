@@ -1,0 +1,172 @@
+
+name: 🚀 Semantic Release - Build, Scan, Push (to GAR)
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write         # Needed to push version bumps
+  security-events: write  # For SARIF uploads to Security tab
+  packages: write         # For pushing images
+  id-token: write         # For GCP Workload Identity Federation
+
+env:
+  IMAGE_NAME: duolingo-clone
+  REGION: us-central1
+  ARTIFACT_REPO: my-artifact-repo
+  PROJECT_ID: my-gcp-project
+
+jobs:
+  semantic-release-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # --- 1️⃣ Checkout repo ---
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required for semantic-release commit analysis
+
+      # --- 2️⃣ Setup Node.js ---
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # --- 3️⃣ Run lint & tests (optional but recommended) ---
+      - name: Run lint and tests
+        run: |
+          npm run lint --if-present
+          npm test --if-present
+
+      # --- 4️⃣ Read current version ---
+      - name: Read current version
+        id: pkg
+        run: echo "version=$(jq -r .version package.json)" >> $GITHUB_OUTPUT
+
+      # --- 5️⃣ Determine next version using semantic-release ---
+      - name: Determine new semantic version
+        id: semver
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          dry_run: true # Only calculate next version
+          extra_plugins: |
+            @semantic-release/commit-analyzer
+            @semantic-release/release-notes-generator
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- 6️⃣ Compare versions and decide ---
+      - name: Set version for build
+        id: version
+        run: |
+          current=${{ steps.pkg.outputs.version }}
+          next=${{ steps.semver.outputs.new_release_version }}
+
+          if [ -z "$next" ] || [ "$next" == "$current" ]; then
+            echo "No semantic changes detected — skipping release."
+            echo "version=$current" >> $GITHUB_OUTPUT
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "New version: $next"
+            echo "version=$next" >> $GITHUB_OUTPUT
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop early if no new release
+        if: steps.version.outputs.should_release == 'false'
+        run: |
+          echo "No new version detected. Exiting workflow."
+          exit 0
+
+      # --- 7️⃣ Update package.json & push ---
+      - name: Update package.json with new version
+        run: |
+          npm version ${{ steps.version.outputs.version }} --no-git-tag-version
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore(release): bump version to ${{ steps.version.outputs.version }} [skip ci]"
+          git push
+
+      # --- 8️⃣ Authenticate to GCP (Workload Identity) ---
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - name: Configure Docker for GCP
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      # --- 9️⃣ Check if image already exists ---
+      - name: Check if image tag already exists in GAR
+        id: check_image
+        continue-on-error: true
+        run: |
+          gcloud artifacts docker images describe \
+            "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}"
+
+      # --- 1️⃣0️⃣ Build image locally ---
+      - name: Build image locally
+        if: steps.check_image.outcome == 'failure'
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false # Don't push yet
+          load: true  # Load into local Docker daemon for scanning
+          tags: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          build-args: |
+            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+            APP_VERSION=${{ steps.version.outputs.version }}
+            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --- 1️⃣1️⃣ Trivy Image Scan (Pre-push) ---
+      - name: Trivy Image Scan (Fails on HIGH/CRITICAL)
+        if: steps.check_image.outcome == 'failure'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          scan-type: 'image'
+          format: 'sarif'
+          output: 'trivy-image.sarif'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Upload SARIF to GitHub Security tab
+        if: always() && steps.check_image.outcome == 'failure'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+
+      - name: Upload Trivy SARIF as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-scan-report
+          path: trivy-image.sarif
+
+      # --- 1️⃣2️⃣ Push image to GAR ---
+      - name: Push image to GAR
+        if: steps.check_image.outcome == 'failure'
+        run: |
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          echo "✅ Successfully pushed version ${{ steps.version.outputs.version }}"
+
+      # --- 1️⃣3️⃣ Log skip ---
+      - name: Log skip if already exists
+        if: steps.check_image.outcome != 'failure'
+        run: |
+          echo "Image version ${{ steps.version.outputs.version }} already exists in GAR."
+          echo "Skipping build, scan, and push."
+
