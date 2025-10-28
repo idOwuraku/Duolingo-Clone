@@ -78,14 +78,10 @@ jobs:
             echo "should_release=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Stop early if no new release
-        if: steps.version.outputs.should_release == 'false'
-        run: |
-          echo "No new version detected. Exiting workflow."
-          exit 0
-
-      # --- 7️⃣ Update package.json & push ---
+      # --- 7️⃣ Update package.json & push (if new version) ---
       - name: Update package.json with new version
+        # FIX: This step now only runs if a new version was found
+        if: steps.version.outputs.should_release == 'true'
         run: |
           npm version ${{ steps.version.outputs.version }} --no-git-tag-version
           git config user.name "github-actions[bot]"
@@ -94,12 +90,16 @@ jobs:
           git commit -m "chore(release): bump version to ${{ steps.version.outputs.version }} [skip ci]"
           git push
 
-      # --- 8️⃣ Set up Docker Buildx ---
+      # --- 8️⃣ Set up Docker Buildx (if new version) ---
       - name: Set up Docker Buildx
+        # FIX: This step now only runs if a new version was found
+        if: steps.version.outputs.should_release == 'true'
         uses: docker/setup-buildx-action@v3
         
-      # --- 9️⃣ Build image locally (no push) ---
+      # --- 9️⃣ Build image locally (if new version) ---
       - name: Build image locally
+        # FIX: This step now only runs if a new version was found
+        if: steps.version.outputs.should_release == 'true'
         id: build
         uses: docker/build-push-action@v5
         with:
@@ -113,4 +113,11 @@ jobs:
             BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          
+      # --- 1️⃣0️⃣ Log skip (if no new version) ---
+      - name: Log skip
+        # This step now only runs if NO new version was found
+        if: steps.version.outputs.should_release == 'false'
+        run: |
+          echo "No new version detected. Exiting workflow."
 
