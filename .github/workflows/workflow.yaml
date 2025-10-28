@@ -1,7 +1,7 @@
-# This is a pipeline to test semantic-release and the docker build.
-# It triggers on push to main, calculates the next version,
-# pushes the new package.json, and builds the image locally.
-name: 🚀 TEST Semantic Release & Build
+# This is a pipeline to test "Full Smart" semantic-release.
+# It triggers on push to main, runs semantic-release to create tags
+# and push commits, then builds the new version locally.
+name: 🚀 TEST Full Smart Semantic Release & Build
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: write         # Needed to push version bumps
+  contents: write         # Needed for semantic-release to push commits/tags
   packages: write         # (Kept for consistency, can be removed)
 
 jobs:
@@ -43,81 +43,44 @@ jobs:
         run: |
           npm run lint --if-present
           npm test --if-present
-
-      # --- 4️⃣ Read current version ---
-      - name: Read current version
-        id: pkg
-        run: echo "version=$(jq -r .version package.json)" >> $GITHUB_OUTPUT
-
-      # --- 5️⃣ Determine next version using semantic-release ---
-      - name: Determine new semantic version
+          
+      # --- 4️⃣ Run semantic-release ---
+      # This step does all the magic:
+      # 1. Analyzes commits since the last Git tag
+      # 2. Creates a new Git tag (e.g., v2.0.0)
+      # 3. Updates package.json and pushes it (if configured)
+      # 4. Creates a GitHub Release
+      - name: Run semantic-release
         id: semver
         uses: cycjimmy/semantic-release-action@v4
-        with:
-          dry_run: true # Only calculate next version
-          extra_plugins: |
-            @semantic-release/commit-analyzer
-            @semantic-release/release-notes-generator
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # --- 6️⃣ Compare versions and decide ---
-      - name: Set version for build
-        id: version
-        run: |
-          current=${{ steps.pkg.outputs.version }}
-          next=${{ steps.semver.outputs.new_release_version }}
-
-          if [ -z "$next" ] || [ "$next" == "$current" ]; then
-            echo "No semantic changes detected — skipping release."
-            echo "version=$current" >> $GITHUB_OUTPUT
-            echo "should_release=false" >> $GITHUB_OUTPUT
-          else
-            echo "New version: $next"
-            echo "version=$next" >> $GITHUB_OUTPUT
-            echo "should_release=true" >> $GITHUB_OUTPUT
-          fi
-
-      # --- 7️⃣ Update package.json & push (if new version) ---
-      - name: Update package.json with new version
-        # FIX: This step now only runs if a new version was found
-        if: steps.version.outputs.should_release == 'true'
-        run: |
-          npm version ${{ steps.version.outputs.version }} --no-git-tag-version
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
-          git commit -m "chore(release): bump version to ${{ steps.version.outputs.version }} [skip ci]"
-          git push
-
-      # --- 8️⃣ Set up Docker Buildx (if new version) ---
+      # --- 5️⃣ Set up Dnpm install --save-dev @semantic-release/npm @semantic-release/gitocker Buildx (if new version) ---
       - name: Set up Docker Buildx
-        # FIX: This step now only runs if a new version was found
-        if: steps.version.outputs.should_release == 'true'
+        if: steps.semver.outputs.new_release_published == 'true'
         uses: docker/setup-buildx-action@v3
         
-      # --- 9️⃣ Build image locally (if new version) ---
+      # --- 6️⃣ Build image locally (if new version) ---
       - name: Build image locally
-        # FIX: This step now only runs if a new version was found
-        if: steps.version.outputs.should_release == 'true'
+        if: steps.semver.outputs.new_release_published == 'true'
         id: build
         uses: docker/build-push-action@v5
         with:
           context: .
           push: false # Do not push
           load: true  # Load into local Docker daemon
-          tags: ${{ env.REGION }}-docker.pkg.dev/local-project/local-repo/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          tags: ${{ env.REGION }}-docker.pkg.dev/local-project/local-repo/${{ env.IMAGE_NAME }}:${{ steps.semver.outputs.new_release_version }}
           build-args: |
             NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-            APP_VERSION=${{ steps.version.outputs.version }}
+            APP_VERSION=${{ steps.semver.outputs.new_release_version }}
             BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           cache-from: type=gha
           cache-to: type=gha,mode=max
           
-      # --- 1️⃣0️⃣ Log skip (if no new version) ---
+      # --- 7️⃣ Log skip (if no new version) ---
       - name: Log skip
-        # This step now only runs if NO new version was found
-        if: steps.version.outputs.should_release == 'false'
+        if: steps.semver.outputs.new_release_published == 'false'
         run: |
           echo "No new version detected. Exiting workflow."
 
