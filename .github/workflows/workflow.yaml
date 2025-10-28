@@ -1,5 +1,7 @@
-
-name: 🚀 Semantic Release - Build, Scan, Push (to GAR)
+# This is a pipeline to test semantic-release and the docker build.
+# It triggers on push to main, calculates the next version,
+# pushes the new package.json, and builds the image locally.
+name: 🚀 TEST Semantic Release & Build
 
 on:
   push:
@@ -8,19 +10,16 @@ on:
 
 permissions:
   contents: write         # Needed to push version bumps
-  security-events: write  # For SARIF uploads to Security tab
-  packages: write         # For pushing images
-  id-token: write         # For GCP Workload Identity Federation
-
-env:
-  IMAGE_NAME: duolingo-clone
-  REGION: africa-south1
-  ARTIFACT_REPO: ${{ secrets.GCP_AR_REPO }}
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  packages: write         # (Kept for consistency, can be removed)
 
 jobs:
   semantic-release-build:
     runs-on: ubuntu-latest
+    
+    env:
+      IMAGE_NAME: duolingo-clone
+      # Define a static region for Docker tag consistency
+      REGION: us-central1 
 
     steps:
       # --- 1️⃣ Checkout repo ---
@@ -95,78 +94,23 @@ jobs:
           git commit -m "chore(release): bump version to ${{ steps.version.outputs.version }} [skip ci]"
           git push
 
-      # --- 8️⃣ Authenticate to GCP (Workload Identity) ---
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_SA_EMAIL }}
-
-      - name: Configure Docker for GCP
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
-
-      # --- 9️⃣ Check if image already exists ---
-      - name: Check if image tag already exists in GAR
-        id: check_image
-        continue-on-error: true
-        run: |
-          gcloud artifacts docker images describe \
-            "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}"
-
-      # --- 1️⃣0️⃣ Build image locally ---
+      # --- 8️⃣ Set up Docker Buildx ---
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      # --- 9️⃣ Build image locally (no push) ---
       - name: Build image locally
-        if: steps.check_image.outcome == 'failure'
         id: build
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: false # Don't push yet
-          load: true  # Load into local Docker daemon for scanning
-          tags: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          push: false # Do not push
+          load: true  # Load into local Docker daemon
+          tags: ${{ env.REGION }}-docker.pkg.dev/local-project/local-repo/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
           build-args: |
             NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
             APP_VERSION=${{ steps.version.outputs.version }}
             BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      # --- 1️⃣1️⃣ Trivy Image Scan (Pre-push) ---
-      - name: Trivy Image Scan (Fails on HIGH/CRITICAL)
-        if: steps.check_image.outcome == 'failure'
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
-          scan-type: 'image'
-          format: 'sarif'
-          output: 'trivy-image.sarif'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'HIGH,CRITICAL'
-
-      - name: Upload SARIF to GitHub Security tab
-        if: always() && steps.check_image.outcome == 'failure'
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-image.sarif
-
-      - name: Upload Trivy SARIF as artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-scan-report
-          path: trivy-image.sarif
-
-      # --- 1️⃣2️⃣ Push image to GAR ---
-      - name: Push image to GAR
-        if: steps.check_image.outcome == 'failure'
-        run: |
-          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
-          echo "✅ Successfully pushed version ${{ steps.version.outputs.version }}"
-
-      # --- 1️⃣3️⃣ Log skip ---
-      - name: Log skip if already exists
-        if: steps.check_image.outcome != 'failure'
-        run: |
-          echo "Image version ${{ steps.version.outputs.version }} already exists in GAR."
-          echo "Skipping build, scan, and push."
 
