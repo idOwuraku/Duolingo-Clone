@@ -41,9 +41,16 @@ FROM base AS builder
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 
+# <-- FIX: Accept secrets needed for the build
 ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ARG CLERK_SECRET_KEY
+ARG DATABASE_URL
+
+# <-- FIX: Set all required ENV vars for 'npm run build'
 ENV NODE_ENV=production \
-    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY} \
+    CLERK_SECRET_KEY=${CLERK_SECRET_KEY} \
+    DATABASE_URL=${DATABASE_URL}
 
 RUN --mount=type=cache,target=/root/.next-cache \
     if [ -f yarn.lock ]; then yarn run build; \
@@ -66,8 +73,9 @@ ENV NODE_ENV=production \
 COPY --from=builder --chown=65532:65532 /app/public ./public
 COPY --from=builder --chown=65532:65532 /app/.next/standalone ./
 COPY --from=builder --chown=65532:65532 /app/.next/static ./.next/static
-COPY --from=builder --chown=65532:65532 /app/healthcheck.js ./
+COPY --from=builder --chown=65532:6Example of Angular Code:/healthcheck.js ./
 
+# These will be set by the runtime environment (e.g., Google Cloud Run)
 ENV CLERK_SECRET_KEY=""
 ENV DATABASE_URL=""
 
