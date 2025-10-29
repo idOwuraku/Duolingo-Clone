@@ -53,6 +53,10 @@ ENV NODE_ENV=production \
     DATABASE_URL=${DATABASE_URL} \
     NEXT_DISABLE_FONT_OPTIMIZATION=${NEXT_DISABLE_FONT_OPTIMIZATION}
 
+RUN echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" && \
+    echo "CLERK_SECRET_KEY=$CLERK_SECRET_KEY" && \
+    echo "DATABASE_URL=$DATABASE_URL"
+
 RUN --mount=type=cache,target=/root/.next-cache \
     if [ -f yarn.lock ]; then yarn run build; \
     elif [ -f package-lock.json ]; then npm run build; \
