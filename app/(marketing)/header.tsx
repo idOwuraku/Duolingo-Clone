@@ -26,15 +26,14 @@ export const Header = () => {
                 </ClerkLoading>
                 <ClerkLoaded>
                     <SignedIn>
-                        <UserButton 
-                            afterSignOutUrl="/"
-                        />
+                        {/* FIX: Removed deprecated prop. This is now handled by .env.local */}
+                        <UserButton />
                     </SignedIn>
                     <SignedOut>
                         <SignInButton
                             mode="modal"
-                            afterSignInUrl="/learn"
-                            afterSignUpUrl="/learn"
+                            fallbackRedirectUrl="/learn"      
+                            signUpFallbackRedirectUrl="/learn" 
                         >
                             <Button className="lg" variant="ghost">
                                 Login

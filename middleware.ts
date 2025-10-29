@@ -1,19 +1,22 @@
-import { authMiddleware } from "@clerk/nextjs";
+import { clerkMiddleware, createRouteMatcher, type ClerkMiddlewareAuth } from "@clerk/nextjs/server";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
-// See https://clerk.com/docs/references/nextjs/auth-middleware
-// for more information about configuring your Middleware
-export default authMiddleware({
-  // Allow signed out users to access the specified routes:
-  // publicRoutes: ['/anyone-can-visit-this-route'],
-  publicRoutes: ["/", "/api/webhooks/stripe"],
+const isPublicRoute = createRouteMatcher(["/", "/api/webhooks/stripe"]);
+
+export default clerkMiddleware(async (auth: ClerkMiddlewareAuth, req: NextRequest) => {
+  const { userId } = await auth();
+
+  if (!isPublicRoute(req) && !userId) {
+    return NextResponse.redirect(new URL("/sign-in", req.url));
+  }
+
+  return NextResponse.next();
 });
 
 export const config = {
   matcher: [
-    // Exclude files with a "." followed by an extension, which are typically static files.
-    // Exclude files in the _next directory, which are Next.js internals.
     "/((?!.+\\.[\\w]+$|_next).*)",
-    // Re-include any files in the api or trpc folders that might have an extension
-    "/(api|trpc)(.*)"
-  ]
+    "/(api|trpc)(.*)",
+  ],
 };

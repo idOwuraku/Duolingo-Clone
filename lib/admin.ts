@@ -1,19 +1,19 @@
-import { auth } from "@clerk/nextjs";
+import { auth } from "@clerk/nextjs/server";
 
 const adminIds = [
-    "user_2gF7aSfrEOmXcQZNLazLFcBKQHs",
+  "user_2gF7aSfrEOmXcQZNLazLFcBKQHs",
 ];
 
-export const isAdmin = () => {
-    const { userId } = auth();
+export const isAdmin = async () => {
+  const { userId } = await auth(); // ✅ must await
 
-    if (!userId) {
-        return false;
-    };
+  if (!userId) {
+    return false;
+  }
 
-    // give access to only these users
-    // return adminIds.indexOf(userId) !== -1;
-    
-    // give access to everybody
-    return true
+  // give access to only these users
+  // return adminIds.includes(userId);
+
+  // give access to everybody
+  return true;
 };
