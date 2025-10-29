@@ -81,23 +81,23 @@ jobs:
           gcloud artifacts docker images describe \
             "${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_AR_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.semver.outputs.new_release_version }}"
 
-      - name: Build image locally
+      - name: Build Docker image
         if: steps.check_image.outcome == 'failure'
         id: build
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: false 
-          load: true  
+          push: false
+          load: true
           tags: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_AR_REPO }}/${{ env.IMAGE_NAME }}:${{ steps.semver.outputs.new_release_version }}
           build-args: |
             NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
             CLERK_SECRET_KEY=${{ secrets.CLERK_SECRET_KEY }}
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             APP_VERSION=${{ steps.semver.outputs.new_release_version }}
-            BUILD_DATE=$(date -u +'%Y-m-%dT%H:%M:%SZ')
-          cache-from: type:gha
-          cache-to: type:gha,mode:max
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Trivy Image Scan (Fails on HIGH/CRITICAL)
         if: steps.build.outcome == 'success' 
