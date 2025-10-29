@@ -58,11 +58,7 @@ RUN echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" 
     echo "DATABASE_URL=$DATABASE_URL"
 
 RUN --mount=type=cache,target=/root/.next-cache \
-    if [ -f yarn.lock ]; then yarn run build; \
-    elif [ -f package-lock.json ]; then npm run build; \
-    elif [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm run build; \
-    else echo "Lockfile not found." && exit 1; \
-    fi
+    npm run build
 
 # --------------------
 # Runner
